@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="XOGame.Shared/XOGame.Shared.csproj" />
+  <Project Path="XOGame/XOGame.Client/XOGame.Client.csproj" />
+  <Project Path="XOGame/XOGame/XOGame.csproj" />
+</Solution>
