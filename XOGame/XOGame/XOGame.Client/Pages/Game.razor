@@ -1,0 +1,244 @@
+﻿@using Microsoft.AspNetCore.SignalR.Client
+@using XOGame.Shared
+@page "/"
+@rendermode InteractiveWebAssembly
+@inject NavigationManager NavigationManager
+@implements IAsyncDisposable
+
+<PageTitle>Game</PageTitle>
+
+@if (!string.IsNullOrEmpty(errorMessage))
+{
+    <div class="alert alert-danger alert-dismissible fade show d-flex align-items-center gap-2 mt-2" role="alert">
+        <i class="bi bi-exclamation-triangle-fill flex-shrink-0"></i>
+        <div>
+            @errorMessage
+        </div>
+        <button type="button" class="btn-close" @onclick="ClearError" aria-label="Close"></button>
+    </div>
+}
+
+@if (createRoomResult is null || !createRoomResult.IsSuccess || createRoomResult.Room is null)
+{
+    <div class="d-flex gap-2 mb-3">
+        <!-- FIXED: Corrected @bind targets -->
+        <input type="text"
+               class="form-control"
+               placeholder="Enter Room name..."
+               @bind="RoomName"
+               disabled="@isSubmitting" />
+
+        <input type="text"
+               class="form-control"
+               placeholder="Enter Player name..."
+               @bind="PlayerName"
+               disabled="@isSubmitting" />
+
+        <button class="btn btn-primary d-flex align-items-center gap-2"
+                @onclick="SubmitRoomName"
+                disabled="@isSubmitting">
+            @if (isSubmitting)
+            {
+                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+            }
+            else
+            {
+                <span>Submit</span>
+            }
+        </button>
+    </div>
+
+    <div class="card border-0 shadow-sm rounded-3">
+        <div class="card-header bg-white py-3">
+            <h5 class="mb-0 fw-bold text-dark">Available Game Rooms</h5>
+        </div>
+
+        <ul class="list-group list-group-flush">
+            @if (_rooms == null || !_rooms.Any())
+            {
+                <li class="list-group-item text-muted text-center py-4">
+                    No rooms available right now.
+                </li>
+            }
+            else
+            {
+                @foreach (var room in _rooms)
+                {
+                    bool isFull = room.Players.Count >= 2;
+
+                    <li class="list-group-item d-flex align-items-center justify-content-between py-3">
+                        <div class="d-flex flex-column gap-1">
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="fw-semibold text-dark fs-6">@room.Name</span>
+
+                                <span class="badge @(isFull ? "bg-danger-subtle text-danger" : "bg-success-subtle text-success") rounded-pill px-2 py-1 small">
+                                    @room.Players.Count / 2 Players
+                                </span>
+                            </div>
+
+                            <div class="small text-muted">
+                                @if (room.Players.Any())
+                                {
+                                    <span>Players: <strong>@string.Join(", ", room.Players.Select(x => x.Name))</strong></span>
+                                }
+                                else
+                                {
+                                    <em class="text-secondary">No players yet</em>
+                                }
+                            </div>
+                        </div>
+
+                        <!-- FIXED: joiningRoomId comparison uses room.Id -->
+                        <button class="btn @(isFull ? "btn-secondary" : "btn-outline-primary") btn-sm px-4 rounded-2 fw-semibold d-flex align-items-center gap-2"
+                                @onclick="() => JoinRoom(room.Id)"
+                                disabled="@(isFull || joiningRoomId == room.Id)">
+                            @if (joiningRoomId == room.Id)
+                            {
+                                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                <span>Joining...</span>
+                            }
+                            else if (isFull)
+                            {
+                                <span>Full</span>
+                            }
+                            else
+                            {
+                                <span>Join</span>
+                            }
+                        </button>
+                    </li>
+                }
+            }
+        </ul>
+    </div>
+}
+else
+{
+    <CascadingValue TValue="HubConnection" Value="_hubConnection">
+        <RoomGame MyRoom="createRoomResult.Room" />
+    </CascadingValue>
+}
+
+@code {
+    private string RoomName = string.Empty;
+    private string? joiningRoomId = null;
+    private string PlayerName = string.Empty;
+    private HubConnection? _hubConnection;
+    private bool isSubmitting = false;
+    private CreateRoomResult? createRoomResult;
+    private List<Room> _rooms = new();
+    private string? errorMessage = null;
+    private CancellationTokenSource? _cts;
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_hubConnection is not null)
+            await _hubConnection.DisposeAsync();
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _hubConnection = new HubConnectionBuilder()
+            .WithUrl(NavigationManager.ToAbsoluteUri("/XoGame"))
+            .Build();
+
+        // FIXED: Wrap state update in InvokeAsync to safely update UI from SignalR thread
+        _hubConnection.On<List<Room>>("ShowRooms", (rooms) =>
+        {
+            _rooms = rooms;
+            InvokeAsync(StateHasChanged);
+        });
+        _hubConnection.On<Room>("ChangeMyRoomStatus", (updatedRoom) =>
+        {
+            if (createRoomResult != null && createRoomResult.Room != null)
+            {
+                // Update the room object live!
+                createRoomResult = new CreateRoomResult(true, updatedRoom);
+                InvokeAsync(StateHasChanged);
+            }
+        });
+
+        await _hubConnection.StartAsync();
+    }
+
+    private async Task SubmitRoomName()
+    {
+        if (string.IsNullOrWhiteSpace(RoomName) || string.IsNullOrWhiteSpace(PlayerName))
+        {
+            await ShowError("Please fill in both Room Name and Player Name.");
+            return;
+        }
+
+        isSubmitting = true;
+
+        if (_hubConnection is not null)
+        {
+            var result = await _hubConnection.InvokeAsync<CreateRoomResult>("CreateRoom", RoomName, PlayerName);
+
+            if (result.IsSuccess)
+            {
+                createRoomResult = result;
+            }
+            else
+            {
+                await ShowError(result.Error ?? "Unexpected Error happened");
+            }
+        }
+
+        isSubmitting = false;
+        StateHasChanged();
+    }
+
+    private async Task JoinRoom(string roomId)
+    {
+        if (string.IsNullOrWhiteSpace(PlayerName))
+        {
+            await ShowError("Please enter your player name before joining a room.");
+            return;
+        }
+
+        joiningRoomId = roomId;
+
+        if (_hubConnection is not null)
+        {
+            var result = await _hubConnection.InvokeAsync<CreateRoomResult>("JoinRoom", roomId, PlayerName);
+
+            if (result.IsSuccess)
+            {
+                createRoomResult = result;
+            }
+            else
+            {
+                await ShowError(result.Error ?? "Unexpected Error happened");
+            }
+        }
+
+        joiningRoomId = null;
+        StateHasChanged();
+    }
+
+    public async Task ShowError(string message)
+    {
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+
+        errorMessage = message;
+        StateHasChanged();
+
+        try
+        {
+            await Task.Delay(5000, _cts.Token);
+            errorMessage = null;
+            StateHasChanged();
+        }
+        catch (TaskCanceledException)
+        {
+        }
+    }
+
+    private void ClearError()
+    {
+        _cts?.Cancel();
+        errorMessage = null;
+    }
+}

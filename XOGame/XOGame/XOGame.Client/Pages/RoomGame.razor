@@ -1,0 +1,149 @@
+﻿@using Microsoft.AspNetCore.SignalR.Client
+@using XOGame.Shared
+
+<div class="game-container text-center py-4">
+    <div class="card shadow-lg border-0 rounded-4 max-w-200 mx-auto">
+        <div class="card-header bg-dark text-white rounded-top-4 py-3">
+            <h3 class="mb-0 fw-bold">Room: <span class="text-warning">@MyRoom?.Name</span></h3>
+        </div>
+
+        <div class="card-body p-4">
+            @if (MyRoom == null || MyRoom.Players.Count < 2)
+            {
+                <div class="alert alert-info d-flex align-items-center justify-content-center gap-2 mb-0" role="alert">
+                    <span class="spinner-grow spinner-grow-sm" role="status"></span>
+                    <span>Waiting for another player to join...</span>
+                </div>
+            }
+            else
+            {
+                @if (!MyRoom.Game.Start)
+                {
+                    <div class="py-4">
+                        @if (myConnectionId == MyRoom.Game.XPlayer)
+                        {
+                            <button class="btn btn-success btn-lg px-5 rounded-pill shadow-sm fw-bold" @onclick="StartGame">
+                                <i class="bi bi-play-fill me-1"></i> Start Game
+                            </button>
+                        }
+                        else
+                        {
+                            <div class="text-muted fs-5">
+                                <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                                Waiting for <strong>@(MyRoom.Players.FirstOrDefault(p => p.ConnectionId == MyRoom.Game.XPlayer)?.Name ?? "Player 1")</strong> to start...
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <!-- Status Header -->
+                    <div class="mb-4">
+                        @if (MyRoom.Game.GameOver)
+                        {
+                            @if (MyRoom.Game.WinnerPlayerId == myConnectionId)
+                            {
+                                <div class="alert alert-success fs-4 fw-bold shadow-sm rounded-3">
+                                    🎉 You are the Winner!
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="alert alert-danger fs-4 fw-bold shadow-sm rounded-3">
+                                    💔 You Lost! Better luck next time.
+                                </div>
+                            }
+                        }
+                        else if (MyRoom.Game.Draw)
+                        {
+                            <div class="alert alert-warning fs-4 fw-bold shadow-sm rounded-3">
+                                🤝 It's a Draw!
+                            </div>
+                        }
+                        else
+                        {
+                            @if (MyRoom.Game.CurrentPlayerRoundId == myConnectionId)
+                            {
+                                <div class="badge bg-primary fs-5 px-4 py-2 rounded-pill shadow-sm">
+                                    Your Turn! Symbol: <span class="badge bg-white text-primary fw-extrabold ms-1">@MyRoom.Game.CurrentSymbolRound</span>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="badge bg-secondary fs-6 px-4 py-2 rounded-pill shadow-sm">
+                                    Opponent's turn...
+                                </div>
+                            }
+                        }
+                    </div>
+
+                    <!-- Game Board Grid -->
+                    <div class="board-grid mx-auto mb-4">
+                        @for (int r = 0; r < 3; r++)
+                        {
+                            @for (int c = 0; c < 3; c++)
+                            {
+                                var _r = r;
+                                var _c = c;
+                                var cellValue = MyRoom.Game.Board[r][c];
+                                bool isMyTurn = MyRoom.Game.CurrentPlayerRoundId == myConnectionId && !MyRoom.Game.GameOver && !MyRoom.Game.Draw;
+                                bool isCellEmpty = string.IsNullOrEmpty(cellValue);
+
+                                <button class="board-cell @(isCellEmpty && isMyTurn ? "cell-hover" : "") @(cellValue == "X" ? "text-danger" : "text-primary")"
+                                        disabled="@(!isMyTurn || !isCellEmpty)"
+                                        @onclick="() => PlayMove(_r, _c)">
+                                    @cellValue
+                                </button>
+                            }
+                        }
+                    </div>
+
+                    <!-- Reset / Play Again Control -->
+                    @if (MyRoom.Game.GameOver || MyRoom.Game.Draw)
+                    {
+                        @if (myConnectionId == MyRoom.Game.XPlayer)
+                        {
+                            <button class="btn btn-warning btn-lg px-4 rounded-pill shadow fw-bold mt-2" @onclick="StartGame">
+                                🔄 Play Again
+                            </button>
+                        }
+                        else
+                        {
+                            <p class="text-muted small">Waiting for room host to restart the game...</p>
+                        }
+                    }
+                }
+            }
+        </div>
+    </div>
+</div>
+
+
+@code {
+    [Parameter]
+    public Room MyRoom { get; set; } = null!;
+
+    [CascadingParameter]
+    public HubConnection? HubConnection { get; set; }
+
+    private string? myConnectionId => HubConnection?.ConnectionId;
+
+    public async Task StartGame()
+    {
+        if (MyRoom is null || HubConnection is null)
+            return;
+
+        if (HubConnection.State == HubConnectionState.Connected)
+        {
+            await HubConnection.InvokeAsync("StartGame", MyRoom.Id);
+        }
+    }
+
+    public async Task PlayMove(int r, int c)
+    {
+        if (HubConnection is not null && string.IsNullOrEmpty(MyRoom.Game.Board[r][c]) && myConnectionId == MyRoom.Game.CurrentPlayerRoundId)
+        {
+            await HubConnection.InvokeAsync("MakeMove", r, c, myConnectionId, MyRoom.Id);
+        }
+    }
+}
